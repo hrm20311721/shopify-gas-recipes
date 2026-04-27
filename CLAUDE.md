@@ -67,6 +67,46 @@ shared/
 - `config.gs` で定義した定数を参照する形にする
 - ユーザーは原則編集不要
 
+## セキュリティと公開時の注意
+
+このリポジトリは **Public** のため、GitHub Secret Scanning が全コミットに対して自動的に動作する。
+
+### 検出されるパターン
+
+ダミー文字列・コメント・サンプルであっても、以下のパターンが含まれていると push がブロックされる。
+
+| サービス | 検出されるパターン例 |
+|---|---|
+| Slack Incoming Webhook | `hooks.slack.com/services/` を含む URL |
+| Shopify アクセストークン | `shpat_` で始まる文字列 |
+| その他 API キー | `sk-`、`Bearer ` + ランダム文字列 など |
+
+### コメント・README の書き方ルール
+
+- `config.gs` や `README.md` にサンプル URL・トークン形式を **そのまま書かない**
+- 取得方法・形式は文章で説明し、実際の値はユーザーが各自取得することを促す
+
+**NG 例（push ブロックされる）：**
+```
+// 例: "https://hooks.slack.com/services/XXXXXXX/XXXXXXX/XXXXXXX"
+```
+
+**OK 例：**
+```
+// 取得方法: Slack アプリ管理画面 > Incoming Webhooks > Webhook URL をコピー
+```
+
+### 誤って検出された場合の修正手順
+
+push が通っていない（直前のコミットのみの問題）であれば amend で修正する。
+
+```bash
+# ファイルを修正後
+git add <修正ファイル>
+git commit --amend --no-edit
+git push origin main
+```
+
 ## GAS固有の注意点
 
 - 実行環境はブラウザではなくGoogleのサーバー。`window`・`document` は存在しない
