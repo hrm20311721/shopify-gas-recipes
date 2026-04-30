@@ -3,37 +3,34 @@
 // ここの値を自分の環境に合わせて書き換えてください
 // ============================================================
 
-// Shopify ストアドメイン
-// 例: "your-store.myshopify.com"（https:// は不要）
-var STORE_DOMAIN = "";
-
 // Slack Incoming Webhook URL
-// 取得方法: Slack アプリ管理画面 > [アプリを作成] > Incoming Webhooks を有効化 > Webhook URL をコピー
+// 取得方法: Slack アプリ管理画面 > Incoming Webhooks > Webhook URL をコピー
 var SLACK_WEBHOOK_URL = "";
+
+// 通知先 Slack チャンネル名
+var SLACK_CHANNEL = "#general";
+
+// ============================================================
+// シート設定
+// Shopify Flow が書き込むシート名・列番号と合わせてください
+// ============================================================
+
+// Shopify Flow が注文データを書き込むシート名
+var ORDERS_SHEET_NAME = "注文データ";
+
+// 列番号（1始まり）— Flow で設定する列の順番と一致させること
+var COL_ORDER_ID     = 1; // 注文ID
+var COL_ORDER_NUMBER = 2; // 注文番号（例: #1001）
+var COL_TOTAL_PRICE  = 3; // 合計金額
+var COL_CREATED_AT   = 4; // 注文作成日時
+var COL_NOTIFIED     = 5; // 通知済み日時（GAS が自動記入）
 
 // ============================================================
 // 任意設定
-// 必要に応じて変更してください（変更しなくても動作します）
 // ============================================================
 
-// 通知先 Slack チャンネル名
-// 例: "#sales-report"
-var SLACK_CHANNEL = "#general";
-
-// 集計対象の注文ステータス
-// "paid"    → 入金済みのみ（実売上の把握に適している）
-// "any"     → キャンセル・返金済みを含む全注文
-var ORDER_FINANCIAL_STATUS = "paid";
-
-// 通知メッセージの日付フォーマット
+// 日付フォーマット
 var DATE_FORMAT = "yyyy/MM/dd";
 
 // タイムゾーン
 var TIMEZONE = "Asia/Tokyo";
-
-// Shopify Admin API バージョン
-var API_VERSION = "2024-04";
-
-// 売上を記録する Google Sheet のシート名
-// スプレッドシート下部のタブ名と合わせてください
-var SHEET_NAME = "売上記録";

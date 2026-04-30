@@ -1,68 +1,58 @@
 // ============================================================
 // エントリポイント
-// GASのトリガーからこの関数を呼び出す
+// GAS のトリガーからこの関数を呼び出す
 // ============================================================
 
 function sendDailySalesReport() {
-  var accessToken = PropertiesService.getScriptProperties().getProperty('ACCESS_TOKEN');
-  if (!accessToken) {
-    throw new Error('ACCESS_TOKEN が Script Properties に設定されていません。README の設定手順を確認してください。');
+  // 未通知の注文をシートから取得する
+  const orders = getUnnotifiedOrders();
+
+  // 未通知の注文がなければ処理を終了する
+  if (orders.length === 0) {
+    console.log('未通知の注文がないため通知をスキップします');
+    return;
   }
 
-  var orders = fetchTodayOrders(accessToken);
-  var summary = calcSummary(orders);
-  logToSheet(summary);
-  var message = buildMessage(summary);
+  const summary = calcSummary(orders);
+  const message = buildMessage(summary);
   postToSlack(message);
+  markAsNotified(orders);
 }
 
 // ============================================================
-// Shopify API から当日の注文一覧を取得する
-// 250件超の場合はページネーションで全件取得する
+// シートから未通知の注文を取得する
+// 「通知済み」列（COL_NOTIFIED）が空の行を対象とする
 // ============================================================
 
-function fetchTodayOrders(accessToken) {
-  // 当日の開始・終了を JST で算出し、Shopify が受け取れる ISO 8601 形式に変換する
-  var now = new Date();
-  var todayStart = new Date(
-    Utilities.formatDate(now, TIMEZONE, 'yyyy-MM-dd') + 'T00:00:00+09:00'
-  );
-  var todayEnd = new Date(
-    Utilities.formatDate(now, TIMEZONE, 'yyyy-MM-dd') + 'T23:59:59+09:00'
-  );
-
-  var baseUrl = 'https://' + STORE_DOMAIN + '/admin/api/' + API_VERSION + '/orders.json';
-  var params = {
-    'created_at_min': todayStart.toISOString(),
-    'created_at_max': todayEnd.toISOString(),
-    'financial_status': ORDER_FINANCIAL_STATUS,
-    'status': 'any',
-    'limit': 250
-  };
-
-  var headers = {
-    'X-Shopify-Access-Token': accessToken,
-    'Content-Type': 'application/json'
-  };
-
-  var allOrders = [];
-  var url = buildUrl(baseUrl, params);
-
-  // ページネーション：Link ヘッダーに next が含まれる限り取得を続ける
-  while (url) {
-    var response = UrlFetchApp.fetch(url, { headers: headers, muteHttpExceptions: true });
-
-    if (response.getResponseCode() !== 200) {
-      throw new Error('Shopify API エラー: ' + response.getResponseCode() + ' ' + response.getContentText());
-    }
-
-    var data = JSON.parse(response.getContentText());
-    allOrders = allOrders.concat(data.orders);
-
-    url = getNextPageUrl(response.getHeaders()['Link']);
+function getUnnotifiedOrders() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ORDERS_SHEET_NAME);
+  if (!sheet) {
+    throw new Error(ORDERS_SHEET_NAME + ' シートが見つかりません。Shopify Flow の設定を確認してください。');
   }
 
-  return allOrders;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return []; // ヘッダー行のみ、またはデータなし
+
+  // 2行目からデータを全件取得する（1行目はヘッダー）
+  const data = sheet.getRange(2, 1, lastRow - 1, COL_NOTIFIED).getValues();
+  const orders = [];
+
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+
+    // 通知済み列に値がある行はスキップする
+    if (row[COL_NOTIFIED - 1]) continue;
+
+    orders.push({
+      rowIndex:    i + 2, // シート上の実際の行番号（ヘッダー分を加算）
+      orderId:     row[COL_ORDER_ID - 1],
+      orderNumber: row[COL_ORDER_NUMBER - 1],
+      totalPrice:  parseFloat(row[COL_TOTAL_PRICE - 1]) || 0,
+      createdAt:   row[COL_CREATED_AT - 1]
+    });
+  }
+
+  return orders;
 }
 
 // ============================================================
@@ -70,15 +60,14 @@ function fetchTodayOrders(accessToken) {
 // ============================================================
 
 function calcSummary(orders) {
-  var totalAmount = 0;
-  var count = orders.length;
+  let totalAmount = 0;
 
-  for (var i = 0; i < orders.length; i++) {
-    // total_price は文字列で返ってくるので数値に変換する
-    totalAmount += parseFloat(orders[i].total_price);
+  for (let i = 0; i < orders.length; i++) {
+    totalAmount += orders[i].totalPrice;
   }
 
-  var avgAmount = count > 0 ? Math.round(totalAmount / count) : 0;
+  const count = orders.length;
+  const avgAmount = count > 0 ? Math.round(totalAmount / count) : 0;
 
   return {
     totalAmount: Math.round(totalAmount),
@@ -92,17 +81,17 @@ function calcSummary(orders) {
 // ============================================================
 
 function buildMessage(summary) {
-  var today = Utilities.formatDate(new Date(), TIMEZONE, DATE_FORMAT);
-  var separator = '────────────────────';
+  const today = Utilities.formatDate(new Date(), TIMEZONE, DATE_FORMAT);
+  const separator = '────────────────────';
 
   return [
-    '📊 本日の売上レポート（' + today + '）',
+    '🛍️ 新しい注文レポート（' + today + ' 時点）',
     separator,
     '売上総額：￥' + summary.totalAmount.toLocaleString(),
     '注文件数：' + summary.count + ' 件',
     '平均客単価：￥' + summary.avgAmount.toLocaleString(),
     separator,
-    '集計対象：' + today + ' 00:00 ～ 23:59（' + TIMEZONE + '）'
+    '集計対象：前回通知以降の新規注文 ' + summary.count + ' 件'
   ].join('\n');
 }
 
@@ -111,19 +100,17 @@ function buildMessage(summary) {
 // ============================================================
 
 function postToSlack(message) {
-  var payload = JSON.stringify({
+  const payload = JSON.stringify({
     channel: SLACK_CHANNEL,
     text: message
   });
 
-  var options = {
+  const response = UrlFetchApp.fetch(SLACK_WEBHOOK_URL, {
     method: 'post',
     contentType: 'application/json',
     payload: payload,
     muteHttpExceptions: true
-  };
-
-  var response = UrlFetchApp.fetch(SLACK_WEBHOOK_URL, options);
+  });
 
   if (response.getResponseCode() !== 200) {
     throw new Error('Slack 送信エラー: ' + response.getResponseCode() + ' ' + response.getContentText());
@@ -131,45 +118,19 @@ function postToSlack(message) {
 }
 
 // ============================================================
-// 売上データを Google Sheet に記録する
-// シートがなければヘッダー行を自動作成する
+// 通知済みの注文行に通知日時を書き込む
 // ============================================================
 
-function logToSheet(summary) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(SHEET_NAME);
+function markAsNotified(orders) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ORDERS_SHEET_NAME);
+  const now = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy/MM/dd HH:mm:ss');
 
-  // シートが存在しない場合は新規作成してヘッダーを追加する
-  if (!sheet) {
-    sheet = ss.insertSheet(SHEET_NAME);
-    sheet.appendRow(['日付', '売上総額', '注文件数', '平均客単価', '記録日時']);
-    sheet.setFrozenRows(1);
-  }
+  // 列番号をアルファベットに変換する（例: 5 → "E"）
+  const col = String.fromCharCode(64 + COL_NOTIFIED);
 
-  var today = Utilities.formatDate(new Date(), TIMEZONE, DATE_FORMAT);
-  var now = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy/MM/dd HH:mm:ss');
+  // 書き込み対象のセルアドレスをまとめて生成する（例: ["E3", "E5", "E8"]）
+  const a1Notations = orders.map(o => col + o.rowIndex);
 
-  sheet.appendRow([today, summary.totalAmount, summary.count, summary.avgAmount, now]);
-}
-
-// ============================================================
-// ユーティリティ関数
-// ============================================================
-
-// オブジェクトをクエリパラメータ付きの URL に変換する
-function buildUrl(baseUrl, params) {
-  var parts = [];
-  for (var key in params) {
-    parts.push(encodeURIComponent(key) + '=' + encodeURIComponent(params[key]));
-  }
-  return baseUrl + '?' + parts.join('&');
-}
-
-// Shopify の Link ヘッダーから次ページの URL を取り出す
-// 例: <https://...?page_info=xxx>; rel="next"
-function getNextPageUrl(linkHeader) {
-  if (!linkHeader) return null;
-
-  var match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-  return match ? match[1] : null;
+  // getRangeList でまとめて指定し setValue を1回だけ呼ぶ（API呼び出しを削減）
+  sheet.getRangeList(a1Notations).setValue(now);
 }
